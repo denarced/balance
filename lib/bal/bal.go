@@ -90,12 +90,13 @@ func toEventType(event fsnotify.Event) EventType {
 }
 
 type loop struct {
-	prev         time.Time
-	sig          <-chan os.Signal
-	events       []EventWrapper
-	watcher      *fsnotify.Watcher
-	shouldIgnore func(event EventWrapper) bool
-	syncCh       chan<- SyncEvent
+	prev            time.Time
+	sig             <-chan os.Signal
+	events          []EventWrapper
+	watcher         *fsnotify.Watcher
+	shouldIgnore    func(event EventWrapper) bool
+	syncCh          chan<- SyncEvent
+	debounceDelayMs int64
 }
 
 // Balance starts to watch filesystem events.
@@ -111,13 +112,15 @@ func Balance(
 	watcher *fsnotify.Watcher,
 	shouldIgnore func(event EventWrapper) bool,
 	syncCh chan<- SyncEvent,
+	debounceDelayMs int64,
 ) error {
 	return (&loop{
-		prev:         time.Now(),
-		sig:          sig,
-		watcher:      watcher,
-		shouldIgnore: shouldIgnore,
-		syncCh:       syncCh,
+		prev:            time.Now(),
+		sig:             sig,
+		watcher:         watcher,
+		shouldIgnore:    shouldIgnore,
+		syncCh:          syncCh,
+		debounceDelayMs: debounceDelayMs,
 	}).run()
 }
 
@@ -137,7 +140,7 @@ func (v *loop) run() error {
 			return NewErrorCode(fmt.Errorf("fsnotify error - %w", err), errCodeWatcherErr)
 		case <-v.sig:
 			return nil
-		case <-time.After(time.Millisecond * 1_000):
+		case <-time.After(time.Millisecond * time.Duration(v.debounceDelayMs)):
 			if err := v.sync(); err != nil {
 				return err
 			}
