@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/denarced/balance/lib/shared"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,6 +43,8 @@ func TestDropEvents(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("%d %s", i, tt.name), func(t *testing.T) {
 			req := require.New(t)
+			shared.InitTestLogger(t)
+
 			expected := pick(tt.events, tt.expected...)
 			filtered := dropEvents(tt.events)
 			req.Equal(expected, filtered)

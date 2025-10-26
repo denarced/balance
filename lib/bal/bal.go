@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/denarced/balance/lib/shared"
 	"github.com/denarced/gent"
 	"github.com/fsnotify/fsnotify"
 )
@@ -153,13 +154,28 @@ func (v *loop) handleEvent(event EventWrapper) {
 		return
 	}
 	curr := time.Now()
-	// delta := curr.Sub(v.prev)
-	// fmt.Printf("%12s % 5d %+v\n", curr.Format("04:05.000000"), delta.Milliseconds(), event)
+	v.recordDelta(curr, fmt.Sprintf("%+v", event))
 	v.events = append(v.events, event)
 	v.prev = curr
 }
 
+func (v *loop) recordDelta(now time.Time, message string) {
+	if shared.IsDebugEnabled() {
+		delta := now.Sub(v.prev)
+		message := fmt.Sprintf(
+			"%12s % 5d %s",
+			now.Format("04:05.000000"),
+			delta.Milliseconds(),
+			message,
+		)
+		shared.Logger.Debug(message)
+	}
+}
+
 func (v *loop) sync() error {
+	if len(v.events) == 0 {
+		return nil
+	}
 	for _, each := range v.events {
 		if each.Kind != EventTypeCreate {
 			continue
@@ -183,10 +199,13 @@ func (v *loop) sync() error {
 	if len(filtered) == 0 {
 		return nil
 	}
-	// curr := time.Now()
-	// fmt.Printf("%12s %s %d\n", curr.Format("04:05.000000"), "sync", len(filtered))
+	curr := time.Now()
+	if shared.IsDebugEnabled() {
+		v.recordDelta(curr, fmt.Sprintf("sync %d", len(filtered)))
+	}
 	v.syncCh <- createSyncEvent(filtered)
 	v.events = nil
+	v.prev = curr
 	return nil
 }
 
