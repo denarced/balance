@@ -3,6 +3,7 @@ package bal
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/denarced/balance/lib/shared"
 	"github.com/stretchr/testify/require"
@@ -82,4 +83,50 @@ func TestEventTypeToString(t *testing.T) {
 			require.Equal(t, tt.expected, tt.event.String())
 		})
 	}
+}
+
+func TestDeriveOptimalDelay(t *testing.T) {
+	var tests = []struct {
+		name     string
+		expected int64
+		deltas   []time.Duration
+	}{
+		{"nil", 0, nil},
+		{"empty", 0, []time.Duration{}},
+		{"not enough", 0, make([]time.Duration, 49)},
+		{"1 to 100", 95, shift(generateRange(1, 101))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shared.InitTestLogger(t)
+			require.Equal(
+				t,
+				time.Duration(tt.expected)*time.Millisecond,
+				deriveOptimalDelay(tt.deltas),
+			)
+		})
+	}
+}
+
+func generateRange(startInclusive, endExclusive int64) (durations []time.Duration) {
+	for i := startInclusive; i < endExclusive; i++ {
+		durations = append(durations, time.Duration(i)*time.Millisecond)
+	}
+	return
+}
+
+func shift[T any](s []T) []T {
+	if len(s) == 0 {
+		return s
+	}
+	return append([]T{s[len(s)-1]}, s[0:len(s)-1]...)
+}
+
+func TestDeriveStd(t *testing.T) {
+	shared.InitTestLogger(t)
+	require.InDelta(
+		t,
+		111.803399,
+		deriveStd([]int64{100, 200, 300, 400}),
+		0.000001)
 }

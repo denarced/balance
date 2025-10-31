@@ -2,6 +2,7 @@ package bal
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -94,6 +95,7 @@ type loop struct {
 	prev            time.Time
 	sig             <-chan os.Signal
 	events          []EventWrapper
+	deltas          []time.Duration
 	watcher         *fsnotify.Watcher
 	shouldIgnore    func(event EventWrapper) bool
 	syncCh          chan<- SyncEvent
@@ -154,14 +156,17 @@ func (v *loop) handleEvent(event EventWrapper) {
 		return
 	}
 	curr := time.Now()
-	v.recordDelta(curr, fmt.Sprintf("%+v", event))
+	delta := v.recordDelta(curr, fmt.Sprintf("%+v", event))
+	if len(v.events) > 0 && delta.Milliseconds() < v.debounceDelayMs {
+		v.deltas = append(v.deltas, delta)
+	}
 	v.events = append(v.events, event)
 	v.prev = curr
 }
 
-func (v *loop) recordDelta(now time.Time, message string) {
+func (v *loop) recordDelta(now time.Time, message string) time.Duration {
+	delta := now.Sub(v.prev)
 	if shared.IsDebugEnabled() {
-		delta := now.Sub(v.prev)
 		message := fmt.Sprintf(
 			"%12s % 5d %s",
 			now.Format("04:05.000000"),
@@ -170,6 +175,7 @@ func (v *loop) recordDelta(now time.Time, message string) {
 		)
 		shared.Logger.Debug(message)
 	}
+	return delta
 }
 
 func (v *loop) sync() error {
@@ -206,6 +212,19 @@ func (v *loop) sync() error {
 	v.syncCh <- createSyncEvent(filtered)
 	v.events = nil
 	v.prev = curr
+	if shared.IsDebugEnabled() {
+		optimal := deriveOptimalDelay(v.deltas)
+		millis := gent.Map(v.deltas, func(d time.Duration) int64 {
+			return d.Milliseconds()
+		})
+		shared.Logger.Debug("Optimal delay calculated.",
+			"optimal", optimal.Milliseconds(),
+			"min", deriveMin(millis),
+			"max", deriveMax(millis),
+			"avg", deriveAverage(millis),
+			"std", deriveStd(millis),
+			"count", len(millis))
+	}
 	return nil
 }
 
@@ -325,4 +344,75 @@ type SyncEvent struct {
 	// Files that changed in some way.
 	Files         []string
 	EventWrappers []EventWrapper
+}
+
+func deriveOptimalDelay(deltas []time.Duration) time.Duration {
+	if len(deltas) < 50 {
+		return 0
+	}
+	slices.Sort(deltas)
+	count := len(deltas)
+	index := count*1000/100*95/1000 - 1
+	return deltas[index]
+}
+
+func deriveMin(s []int64) int64 {
+	var minimum int64
+	for _, each := range s {
+		minimum = min(minimum, each)
+	}
+	return minimum
+}
+
+func deriveMax(s []int64) int64 {
+	var maximus int64
+	for _, each := range s {
+		maximus = max(maximus, each)
+	}
+	return maximus
+}
+
+func deriveAverage(s []int64) float64 {
+	if len(s) == 0 {
+		return 0
+	}
+	var count int
+	var total float64
+	for _, each := range s {
+		count++
+		total += float64(each)
+	}
+	return total / float64(count)
+}
+
+func deriveStd(s []int64) float64 {
+	n := len(s)
+	if n == 0 || n == 1 {
+		return 0.0
+	}
+
+	sumSqDiff := deriveSquareDifferenceSum(s)
+	variance := sumSqDiff / float64(n)
+	return math.Sqrt(variance)
+}
+
+func deriveSum(s []int64) int64 {
+	var sum int64
+	for _, val := range s {
+		sum += val
+		if sum < 0 {
+			panic("int64 overflow: impressive!")
+		}
+	}
+	return sum
+}
+
+func deriveSquareDifferenceSum(s []int64) float64 {
+	mean := float64(deriveSum(s)) / float64(len(s))
+	var sum float64
+	for _, val := range s {
+		diff := float64(val) - mean
+		sum += diff * diff
+	}
+	return sum
 }
