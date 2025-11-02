@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/denarced/balance/lib/shared"
@@ -69,7 +70,20 @@ func toEventWrapper(event fsnotify.Event) (wrapper EventWrapper, err error) {
 	if stat != nil {
 		dir = stat.IsDir()
 	}
-	return EventWrapper{Name: event.Name, Kind: toEventType(event), Exists: exists, Dir: dir}, nil
+	// Adding watches for dirs "." and "src" results in events for files "./main.c" and
+	// "src/main.c". It makes it really confusing to create include and exclude rules so the name is
+	// canonicalized here. I'm guessing most people don't want to keep adding the obvious "./" at
+	// beginning of every glob. It would be different if glob "main.c" would match to both
+	// "./main.c" and "src/main.c" and "./main.c" only to "./main.c" but that's not the case.
+	// Without this fix, "main.c" wouldn't match to anything while '**/main.c" would. The outcome
+	// would be that every glob would be either "./some" or "**/some". I.e. the maximum possible
+	// hassle.
+	return EventWrapper{
+		Name:   strings.TrimPrefix(event.Name, "./"),
+		Kind:   toEventType(event),
+		Exists: exists,
+		Dir:    dir,
+	}, nil
 }
 
 func toEventType(event fsnotify.Event) EventType {
@@ -189,6 +203,14 @@ func (v *loop) sync() error {
 		if !each.Exists || !each.Dir {
 			continue
 		}
+
+		w := each
+		w.Name += "/"
+		if v.shouldIgnore(w) {
+			shared.Logger.Debug("Skip dir.", "dir", each.Name)
+			continue
+		}
+		shared.Logger.Debug("Add dir.", "dir", each.Name)
 
 		if err := v.watcher.Add(each.Name); err != nil {
 			return NewErrorCode(

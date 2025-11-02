@@ -79,8 +79,20 @@ func main() {
 	}
 	dieIfErr(shared.InitLogger(CLI.LogFile, CLI.LogLevel))
 
+	includes, iErr := toGlobs(CLI.Include)
+	excludes, eErr := toGlobs(CLI.Exclude)
+	dieIfErr(errors.Join(iErr, eErr))
+
 	// Setup monitors
-	dirs, err := scanDirs()
+	dirs, err := scanDirs(func(dpath string) bool {
+		return matchExclude(
+			bal.EventWrapper{
+				Dir:  true,
+				Kind: bal.EventTypeCreate,
+				Name: dpath + "/",
+			},
+			excludes)
+	})
 	dieIfErr(err)
 	watcher, err := setup(dirs)
 	dieIfErr(err)
@@ -95,22 +107,18 @@ func main() {
 		}
 	}()
 
-	includes, iErr := toGlobs(CLI.Include)
-	excludes, eErr := toGlobs(CLI.Exclude)
-	dieIfErr(errors.Join(iErr, eErr))
-
 	// The main event
 	dieIfErr(bal.Balance(sig, watcher, func(event bal.EventWrapper) bool {
 		return shouldIgnore(includes, excludes, event)
 	}, syncCh, CLI.DebounceDelay))
 }
 
-func scanDirs() (dirs []string, err error) {
+func scanDirs(shouldIgnore func(dpath string) bool) (dirs []string, err error) {
 	err = filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() {
+		if !d.IsDir() || shouldIgnore(path) {
 			return nil
 		}
 		dirs = append(dirs, path)
@@ -245,7 +253,7 @@ func toGlobs(patterns []string) (globs []glob.Glob, err error) {
 	if patterns == nil {
 		return
 	}
-	for _, each := range patterns {
+	for _, each := range expand(patterns) {
 		var g glob.Glob
 		g, err = glob.Compile(each)
 		if err != nil {
@@ -254,4 +262,23 @@ func toGlobs(patterns []string) (globs []glob.Glob, err error) {
 		globs = append(globs, g)
 	}
 	return
+}
+
+// Expand all "**/" prefixed patterns to without it.
+// My guess was that "**/.hg/**" would match to ".hg/": it didn't. Instead it would match to
+// "/.hg/". That makes no sense so an obvious fix is to "duplicate" the pattern: add ".hg/**".
+func expand(patterns []string) []string {
+	if len(patterns) == 0 {
+		return patterns
+	}
+	expanded := make([]string, 0, len(patterns))
+	prefix := "**/"
+	for _, each := range patterns {
+		expanded = append(expanded, each)
+		without, found := strings.CutPrefix(each, prefix)
+		if found {
+			expanded = append(expanded, without)
+		}
+	}
+	return expanded
 }
